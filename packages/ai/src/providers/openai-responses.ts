@@ -1800,6 +1800,27 @@ export function buildParams(
 	// retain required text/placeholder replay, including DeepSeek's #10690 fallback.
 	const canReconstructReasoningReplay =
 		!policy.reasoning.filterReasoningHistory || policy.reasoning.allowsSyntheticReasoningContentForToolCalls;
+	// A proxy that translates Responses requests into chat completions reads a
+	// reasoning item's `summary` and ignores `content`, so a replayed item
+	// without a summary reaches the upstream model as `reasoning_content:
+	// "[reasoning unavailable]"`, which reasoning models echo back as their own
+	// thinking. The same proxy fabricates the placeholder for every replayed
+	// tool-call turn that carries no reasoning item at all.
+	//
+	// The proxy only fabricates while the request engages reasoning: its
+	// fallback is armed by the reasoning effort in the request body, which is
+	// exactly when omp sends one. Official OpenAI-family endpoints reject
+	// unsigned reasoning items, and targets that demand reasoning replay
+	// (DeepSeek family, OpenRouter) bring their own placeholder handling, so
+	// both keep the current behavior.
+	const gatewayReasoningReplay =
+		policy.reasoning.enabled &&
+		model.compat.officialEndpoint !== true &&
+		!policy.reasoning.requiresReasoningContentForToolCalls &&
+		!policy.reasoning.requiresReasoningContentForAllAssistantTurns &&
+		!policy.reasoning.filterReasoningHistory &&
+		policy.reasoning.allowsSyntheticReasoningContentForToolCalls !== false &&
+		canReconstructReasoningReplay;
 	const toolNaming = responsesToolNaming(model);
 	const messages = buildResponsesInput({
 		model,
@@ -1819,6 +1840,7 @@ export function buildParams(
 			policy.reasoning.enabled &&
 			policy.reasoning.requiresReasoningContentForToolCalls &&
 			canReconstructReasoningReplay,
+		gatewayReasoningReplay,
 		repairOrphanOutputs: true,
 		toolNaming,
 	});

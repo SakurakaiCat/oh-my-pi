@@ -8,6 +8,13 @@ import { invalidToolCallArguments } from "./utils/tool-call-arguments";
 type OpenAIResponsesReplayItem = ResponseInput[number];
 const NON_WHITESPACE_RE = /\S/;
 
+export {
+	isPlaceholderOnlyReasoningItem,
+	isSyntheticReasoningPlaceholder,
+	SYNTHETIC_REASONING_REPLAY_PLACEHOLDER,
+} from "./utils/reasoning-placeholder";
+import { isPlaceholderOnlyReasoningItem, isSyntheticReasoningPlaceholder } from "./utils/reasoning-placeholder";
+
 export { isRecord } from "@oh-my-pi/pi-utils";
 /**
  * Read a header value ignoring key casing. HTTP header names are
@@ -640,11 +647,31 @@ function sanitizeOpenAIResponsesHistoryItemForReplay(
 function sanitizeOpenAIResponsesReasoningItemForReplay(
 	item: Record<string, unknown>,
 	preserveItemId: boolean,
-): OpenAIResponsesReplayItem {
+): OpenAIResponsesReplayItem | undefined {
+	// A gateway-synthesized placeholder (`[reasoning unavailable]`) is not
+	// reasoning: the proxy had nothing real to send, and replaying the text
+	// makes the model echo it back as its own thinking. Drop such an item
+	// outright when nothing else survives, and strip placeholder parts from an
+	// item that also carries real text.
+	if (isPlaceholderOnlyReasoningItem(item)) return undefined;
 	const sanitizedItem: Record<string, unknown> = { type: "reasoning" };
 	if (preserveItemId && typeof item.id === "string") sanitizedItem.id = item.id;
-	if (Array.isArray(item.summary)) sanitizedItem.summary = item.summary;
-	if (Array.isArray(item.content)) sanitizedItem.content = item.content;
+	if (Array.isArray(item.summary)) {
+		const summary = item.summary.filter(
+			part => !isSyntheticReasoningPlaceholder((part as { text?: unknown } | null)?.text),
+		);
+		// An empty array is the provider's own shape and stays as it is; only a
+		// fully placeholder-filled array disappears.
+		if (summary.length > 0 || item.summary.length === 0) sanitizedItem.summary = summary;
+	}
+	if (Array.isArray(item.content)) {
+		const content = item.content.filter(part => {
+			const typed = part as { type?: unknown; text?: unknown } | null;
+			if (typed?.type !== "reasoning_text") return true;
+			return !isSyntheticReasoningPlaceholder(typed.text);
+		});
+		if (content.length > 0 || item.content.length === 0) sanitizedItem.content = content;
+	}
 	if (typeof item.encrypted_content === "string" || item.encrypted_content === null) {
 		sanitizedItem.encrypted_content = item.encrypted_content;
 	}

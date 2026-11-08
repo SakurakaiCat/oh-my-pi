@@ -3,6 +3,10 @@ import { resolveCatalogPolicy } from "@oh-my-pi/pi-catalog/compat/catalog-policy
 import { carriesReasoning } from "@oh-my-pi/pi-catalog/compat/reasoning-carry";
 import type { ResolvedOpenAICompat } from "@oh-my-pi/pi-catalog/types";
 import { renderDemotedThinking } from "../dialect/demotion";
+import {
+	isSyntheticReasoningPlaceholder,
+	reasoningSignatureCarriesEncryptedReasoning,
+} from "../utils/reasoning-placeholder";
 import type {
 	Api,
 	AssistantMessage,
@@ -1090,6 +1094,18 @@ export function transformMessages<TApi extends Api>(
 					return [];
 				}
 				if (block.type === "thinking") {
+					// A gateway placeholder (`[reasoning unavailable]`) is not reasoning:
+					// the proxy injected it because it had nothing real to replay, and
+					// the model echoed it back as its own thinking. Demoting it to prose
+					// would re-inject the same text on every later turn, so drop it —
+					// unless the turn's signature carries the server's opaque reasoning
+					// blob, which is the real reasoning.
+					if (
+						isSyntheticReasoningPlaceholder(block.thinking) &&
+						!reasoningSignatureCarriesEncryptedReasoning(block.thinkingSignature)
+					) {
+						return [];
+					}
 					// Only an aborted/errored turn's final (mid-stream) block can hold a
 					// partial signature; abandoned tool-use turns strip all. Drop the
 					// untrustworthy signature so the encoder can downgrade the block to text.
